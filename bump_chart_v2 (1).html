@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<title>Architectural Design — Bump Chart</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0f0f0f;font-family:Arial,sans-serif;color:#eee;min-height:100vh;}
+#top{padding:28px 32px 0;display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap;}
+#titles h1{font-size:20px;font-weight:700;color:#fff;letter-spacing:-.02em;}
+#titles p{font-size:12px;color:#666;margin-top:4px;line-height:1.5;}
+#controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding-top:4px;}
+#search-wrap{position:relative;}
+#search{background:#1a1a1a;border:0.5px solid #333;color:#ccc;font-size:12px;padding:5px 10px 5px 28px;border-radius:20px;width:160px;outline:none;transition:border-color .2s;}
+#search:focus{border-color:#666;}
+#search-wrap::before{content:'⌕';position:absolute;left:9px;top:50%;transform:translateY(-50%);color:#555;font-size:14px;pointer-events:none;}
+#btn-dl{background:transparent;border:0.5px solid #333;color:#888;font-size:11px;padding:5px 12px;border-radius:20px;cursor:pointer;transition:all .2s;}
+#btn-dl:hover{border-color:#666;color:#ccc;}
+#info-panel{background:#1a1a1a;border:0.5px solid #2a2a2a;border-radius:10px;padding:14px 18px;margin:14px 32px 0;min-height:56px;display:flex;align-items:center;gap:24px;transition:opacity .3s;}
+#info-panel.hidden{opacity:0.3;}
+#info-word{font-size:18px;font-weight:700;color:#fff;min-width:130px;}
+#info-bars{display:flex;gap:14px;align-items:flex-end;}
+.info-col{display:flex;flex-direction:column;align-items:center;gap:4px;}
+.info-bar-wrap{height:40px;display:flex;align-items:flex-end;}
+.info-bar{width:36px;border-radius:3px 3px 0 0;transition:height .4s;}
+.info-period{font-size:10px;color:#555;}
+.info-freq{font-size:11px;font-weight:700;}
+#info-story{font-size:12px;color:#777;max-width:340px;line-height:1.6;}
+#chart-wrap{padding:16px 32px 32px;overflow-x:auto;}
+svg{display:block;}
+.line-group{cursor:pointer;}
+.line-group path.bg-stroke{fill:none;stroke-width:6;transition:opacity .25s;}
+.line-group text{transition:opacity .25s;}
+.dimmed .line-group{opacity:0.07;}
+.dimmed .line-group.hovered{opacity:1;}
+.dimmed .line-group.searched{opacity:1;}
+.searched .bg-stroke{filter:drop-shadow(0 0 4px currentColor);}
+</style>
+</head>
+<body>
+
+<div id="top">
+  <div id="titles">
+    <h1>Architectural Design — Sözcük Sıralama Haritası</h1>
+    <p>Her çizgi bir sözcüğün dört dönem boyunca izlediği yolu gösterir · Sıralama 1 = en yüksek frekans</p>
+  </div>
+  <div id="controls">
+    <div id="search-wrap"><input id="search" type="text" placeholder="Sözcük ara…"></div>
+    <button id="btn-dl">↓ SVG indir</button>
+  </div>
+</div>
+
+<div id="info-panel" class="hidden">
+  <div id="info-word">—</div>
+  <div id="info-bars"></div>
+  <div id="info-story">Bir sözcüğün üzerine gelin.</div>
+</div>
+
+<div id="chart-wrap">
+  <svg id="chart" xmlns="http://www.w3.org/2000/svg"></svg>
+</div>
+
+<script>
+const words = [
+  {name:'robotic',        vals:[66,568,431,349],  color:'#378ADD'},
+  {name:'beauty',         vals:[103,75,445,155],  color:'#D85A30'},
+  {name:'bottom',         vals:[136,532,202,104], color:'#1D9E75'},
+  {name:'discrete',       vals:[104,116,427,59],  color:'#7F77DD'},
+  {name:'fabrication',    vals:[247,755,627,444], color:'#BA7517'},
+  {name:'computational',  vals:[222,656,545,207], color:'#D4537E'},
+  {name:'print',          vals:[223,650,870,589], color:'#3B6D11'},
+  {name:'film',           vals:[256,180,54,148],  color:'#E24B4A'},
+  {name:'detail',         vals:[413,1056,403,486],color:'#0F6E56'},
+  {name:'fragment',       vals:[121,124,94,235],  color:'#534AB7'},
+  {name:'border',         vals:[84,98,68,164],    color:'#993C1D'},
+  {name:'music',          vals:[153,69,165,230],  color:'#854F0B'},
+  {name:'food',           vals:[139,331,235,155], color:'#185FA5'},
+  {name:'scene',          vals:[119,93,95,221],   color:'#993556'},
+  {name:'capitalism',     vals:[51,116,77,74],    color:'#639922'},
+  {name:'poetic',         vals:[63,50,113,67],    color:'#0C447C'},
+  {name:'ecological',     vals:[206,455,169,259], color:'#3C3489'},
+  {name:'game',           vals:[138,303,289,236], color:'#5DCAA5'},
+  {name:'transportation', vals:[64,139,74,53],    color:'#712B13'},
+  {name:'stage',          vals:[276,280,260,561], color:'#E09020'},
+  {name:'unfold',         vals:[70,96,56,120],    color:'#5599CC'},
+  {name:'synthesis',      vals:[68,78,55,117],    color:'#44AA77'},
+  {name:'builder',        vals:[132,51,108,50],   color:'#CC6644'},
+  {name:'engagement',     vals:[91,192,197,167],  color:'#9977BB'},
+  {name:'ownership',      vals:[81,65,134,87],    color:'#AA8844'},
+];
+
+const periods = ['2005–09','2010–14','2015–19','2020–24'];
+const N = words.length;
+
+function getRanks(ci){
+  const s=[...words].map((w,i)=>({v:w.vals[ci],i})).sort((a,b)=>b.v-a.v);
+  const r={};s.forEach(({i},rank)=>r[i]=rank+1);return r;
+}
+const allRanks=[0,1,2,3].map(getRanks);
+
+const rowH=34,padT=60,padB=70;
+const H=padT+N*rowH+padB;
+const labelW=160,freqW=44,gap=14,dotPad=8;
+const col0=labelW+freqW+gap;
+const colXs=[col0,col0+480,col0+960,col0+1440];
+const W=colXs[3]+gap+labelW+freqW+20;
+const rankY=r=>padT+(r-1)*rowH+rowH/2;
+
+const svg=document.getElementById('chart');
+const ns='http://www.w3.org/2000/svg';
+svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+svg.setAttribute('width',W);
+svg.setAttribute('height',H);
+
+const el=(tag,attrs={},parent=svg)=>{
+  const e=document.createElementNS(ns,tag);
+  Object.entries(attrs).forEach(([k,v])=>e.setAttribute(k,v));
+  parent.appendChild(e);return e;
+};
+
+// background
+el('rect',{x:0,y:0,width:W,height:H,fill:'#0f0f0f'});
+
+// rank grid lines
+for(let r=1;r<=N;r++){
+  const y=rankY(r);
+  el('line',{x1:colXs[0],y1:y,x2:colXs[3],y2:y,stroke:'#1e1e1e','stroke-width':'1'});
+  // rank number left
+  const rn=el('text',{x:colXs[0]-gap*2.5,y:y+4,'text-anchor':'end','font-size':'9',fill:'#2e2e2e'});
+  rn.textContent=r;
+}
+
+// period columns
+periods.forEach((p,ci)=>{
+  const x=colXs[ci];
+  el('line',{x1:x,y1:padT-20,x2:x,y2:H-padB+12,stroke:'#2a2a2a','stroke-width':'1'});
+  const t=el('text',{x,y:H-padB+36,'text-anchor':'middle','font-size':'15','font-weight':'bold',fill:'#444'});
+  t.textContent=p;
+});
+
+// subtitle
+const sub=el('text',{x:W/2,y:padT-16,'text-anchor':'middle','font-size':'10',fill:'#333'});
+sub.textContent='Sıralama 1 = en yüksek frekans  ·  İç ve orta noktaların yanındaki sayı: ham frekans  ·  Hover ile detay';
+
+const defs=el('defs');
+
+const pathD=i=>{
+  const pts=colXs.map((x,ci)=>({x,y:rankY(allRanks[ci][i])}));
+  let d=`M ${pts[0].x},${pts[0].y}`;
+  for(let k=0;k<3;k++){
+    const {x:x1,y:y1}=pts[k],{x:x2,y:y2}=pts[k+1],mx=(x1+x2)/2;
+    d+=` C ${mx},${y1} ${mx},${y2} ${x2},${y2}`;
+  }
+  return d;
+};
+
+// sort by volatility for layering
+const byVol=words.map((_,i)=>{
+  const rs=[0,1,2,3].map(ci=>allRanks[ci][i]);
+  return{i,spread:Math.max(...rs)-Math.min(...rs)};
+}).sort((a,b)=>a.spread-b.spread);
+
+const groups=[];
+
+byVol.forEach(({i})=>{
+  const w=words[i];
+  const d=pathD(i);
+
+  // path in defs for textPath
+  el('path',{id:`p${i}`,d},defs);
+
+  const g=document.createElementNS(ns,'g');
+  g.setAttribute('class','line-group');
+  g.setAttribute('data-idx',i);
+  svg.appendChild(g);
+  groups[i]=g;
+
+  // invisible hit area
+  const hit=document.createElementNS(ns,'path');
+  hit.setAttribute('d',d);hit.setAttribute('fill','none');
+  hit.setAttribute('stroke','transparent');hit.setAttribute('stroke-width','14');
+  g.appendChild(hit);
+
+  // textPath line (the actual visible line IS the repeated text)
+  const txt=document.createElementNS(ns,'text');
+  txt.setAttribute('font-size','7');txt.setAttribute('font-weight','bold');
+  txt.setAttribute('fill',w.color);txt.setAttribute('font-family','Arial,sans-serif');
+  txt.setAttribute('letter-spacing','0.8');txt.setAttribute('opacity','0.85');
+  const tp=document.createElementNS(ns,'textPath');
+  tp.setAttribute('href',`#p${i}`);tp.setAttribute('startOffset','0%');
+  tp.textContent=(w.name+' · ').repeat(80);
+  txt.appendChild(tp);g.appendChild(txt);
+
+  // dots + freq labels
+  colXs.forEach((x,ci)=>{
+    const y=rankY(allRanks[ci][i]);
+    const c=document.createElementNS(ns,'circle');
+    c.setAttribute('cx',x);c.setAttribute('cy',y);c.setAttribute('r','4');
+    c.setAttribute('fill',w.color);c.setAttribute('opacity','0.9');
+    g.appendChild(c);
+    if(ci===1||ci===2){
+      const ft=document.createElementNS(ns,'text');
+      ft.setAttribute('x',x);ft.setAttribute('y',y-9);
+      ft.setAttribute('text-anchor','middle');ft.setAttribute('font-size','8.5');
+      ft.setAttribute('font-weight','bold');ft.setAttribute('fill',w.color);ft.setAttribute('opacity','0.7');
+      ft.textContent=w.vals[ci];
+      g.appendChild(ft);
+    }
+  });
+
+  // left label
+  const lrank=allRanks[0][i];
+  const ly=rankY(lrank);
+  const lt=document.createElementNS(ns,'text');
+  lt.setAttribute('x',col0-gap-freqW-dotPad);lt.setAttribute('y',ly+4);
+  lt.setAttribute('text-anchor','end');lt.setAttribute('font-size','11');
+  lt.setAttribute('font-weight','bold');lt.setAttribute('fill',w.color);
+  lt.textContent=w.name;g.appendChild(lt);
+  const lf=document.createElementNS(ns,'text');
+  lf.setAttribute('x',col0-gap-dotPad);lf.setAttribute('y',ly+4);
+  lf.setAttribute('text-anchor','end');lf.setAttribute('font-size','9.5');
+  lf.setAttribute('fill',w.color);lf.setAttribute('opacity','0.6');
+  lf.textContent=w.vals[0];g.appendChild(lf);
+
+  // right label
+  const rrank=allRanks[3][i];
+  const ry=rankY(rrank);
+  const rf=document.createElementNS(ns,'text');
+  rf.setAttribute('x',colXs[3]+gap+dotPad);rf.setAttribute('y',ry+4);
+  rf.setAttribute('text-anchor','start');rf.setAttribute('font-size','9.5');
+  rf.setAttribute('fill',w.color);rf.setAttribute('opacity','0.6');
+  rf.textContent=w.vals[3];g.appendChild(rf);
+  const rt=document.createElementNS(ns,'text');
+  rt.setAttribute('x',colXs[3]+gap+freqW+dotPad);rt.setAttribute('y',ry+4);
+  rt.setAttribute('text-anchor','start');rt.setAttribute('font-size','11');
+  rt.setAttribute('font-weight','bold');rt.setAttribute('fill',w.color);
+  rt.textContent=w.name;g.appendChild(rt);
+});
+
+// --- ANIMATION: CSS keyframes per textPath (GPU-accelerated, no JS loop) ---
+const styleEl=document.createElement('style');
+let css='@keyframes drift{from{startOffset:0%}to{startOffset:100%}}';
+words.forEach((w,i)=>{
+  const dur=(38+i*1.7).toFixed(1);
+  css+=`#chart textPath[data-i="${i}"]{animation:drift ${dur}s linear infinite;}`;
+});
+styleEl.textContent=css;
+document.head.appendChild(styleEl);
+svg.querySelectorAll('textPath').forEach((tp,idx)=>{
+  tp.setAttribute('data-i',idx);
+});
+
+// --- INFO PANEL ---
+const panel=document.getElementById('info-panel');
+const infoWord=document.getElementById('info-word');
+const infoBars=document.getElementById('info-bars');
+const infoStory=document.getElementById('info-story');
+
+function generateStory(w){
+  const maxPeriod=['2005–09','2010–14','2015–19','2020–24'][w.vals.indexOf(Math.max(...w.vals))];
+  const minPeriod=['2005–09','2010–14','2015–19','2020–24'][w.vals.indexOf(Math.min(...w.vals))];
+  const trend=w.vals[3]>w.vals[0]?'yükselişte':'düşüşte';
+  const delta=Math.abs(w.vals[3]-w.vals[0]);
+  return `Zirve: <b>${maxPeriod}</b> (${Math.max(...w.vals)}× kullanım) · En düşük: <b>${minPeriod}</b> · 2005→2024 arası ${trend}: Δ${delta}`;
+}
+
+function showInfo(w){
+  panel.classList.remove('hidden');
+  infoWord.textContent=w.name;
+  infoWord.style.color=w.color;
+  const maxF=Math.max(...w.vals);
+  infoBars.innerHTML='';
+  w.vals.forEach((f,ci)=>{
+    const h=Math.max(4,Math.round((f/maxF)*40));
+    infoBars.innerHTML+=`<div class="info-col">
+      <div class="info-freq" style="color:${w.color}">${f}</div>
+      <div class="info-bar-wrap"><div class="info-bar" style="background:${w.color};height:${h}px;opacity:${0.5+0.5*(f/maxF)}"></div></div>
+      <div class="info-period">${periods[ci]}</div>
+    </div>`;
+  });
+  infoStory.innerHTML=generateStory(w);
+}
+
+// --- HOVER INTERACTIONS ---
+let hovered=null;
+groups.forEach((g,i)=>{
+  if(!g)return;
+  const w=words[i];
+  g.addEventListener('mouseenter',()=>{
+    hovered=i;
+    svg.classList.add('dimmed');
+    g.classList.add('hovered');
+    showInfo(w);
+    // bring to front
+    svg.appendChild(g);
+  });
+  g.addEventListener('mouseleave',()=>{
+    hovered=null;
+    svg.classList.remove('dimmed');
+    g.classList.remove('hovered');
+    panel.classList.add('hidden');
+    infoWord.textContent='—';infoWord.style.color='';
+    infoBars.innerHTML='';
+    infoStory.textContent='Bir sözcüğün üzerine gelin.';
+  });
+});
+
+// --- SEARCH ---
+const searchEl=document.getElementById('search');
+searchEl.addEventListener('input',()=>{
+  const q=searchEl.value.trim().toLowerCase();
+  groups.forEach((g,i)=>{
+    if(!g)return;
+    g.classList.remove('searched');
+  });
+  if(!q){svg.classList.remove('dimmed');return;}
+  svg.classList.add('dimmed');
+  groups.forEach((g,i)=>{
+    if(!g)return;
+    const w=words[i];
+    if(w.name.toLowerCase().includes(q)){
+      g.classList.add('searched');
+      svg.appendChild(g);
+      showInfo(w);
+    }
+  });
+});
+
+// --- DOWNLOAD ---
+document.getElementById('btn-dl').addEventListener('click',()=>{
+  const s=new XMLSerializer();
+  const src=s.serializeToString(svg);
+  const blob=new Blob([src],{type:'image/svg+xml'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;a.download='architectural-design-bumpchart.svg';
+  a.click();URL.revokeObjectURL(url);
+});
+</script>
+</body>
+</html>
